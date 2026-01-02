@@ -119,10 +119,13 @@ app.post('/embed', async (req, res) => {
     const cacheStatus = wasCached ? '💾 CACHE HIT' : '🔄 GENERATED';
     console.log(`✅ ${cacheStatus}: ${elapsed}ms (${embedding.length} dims, cache: ${embeddingCache.size}/${MAX_CACHE_SIZE})`);
 
-    res.json({
+    const response = {
       embedding,
       dimensions: embedding.length
-    });
+    };
+
+    res.json(response);
+    console.log(`📤 Response sent (${JSON.stringify(response).length} bytes)`);
 
   } catch (error) {
     console.error('❌ Embedding error:', error.message);
@@ -170,11 +173,14 @@ app.post('/embed/batch', async (req, res) => {
     const avgTime = (elapsed / texts.length).toFixed(1);
     console.log(`✅ Batch complete: ${texts.length} embeddings in ${elapsed}ms (avg ${avgTime}ms each, cache: ${embeddingCache.size}/${MAX_CACHE_SIZE})`);
 
-    res.json({
+    const response = {
       embeddings,
       count: embeddings.length,
       dimensions: embeddings[0]?.length || 0
-    });
+    };
+
+    res.json(response);
+    console.log(`📤 Batch response sent (${JSON.stringify(response).length} bytes)`);
 
   } catch (error) {
     console.error('❌ Batch embedding error:', error.message);
