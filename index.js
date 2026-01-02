@@ -70,8 +70,8 @@ async function generateEmbedding(text) {
 }
 
 // Health check
-app.get('/health', (req, res) => {
-  res.json({
+app.get('/health', (_req, res) => {
+  const response = {
     status: 'ok',
     model: 'all-MiniLM-L6-v2',
     ready: embedder !== null,
@@ -82,7 +82,11 @@ app.get('/health', (req, res) => {
       cacheSize: embeddingCache.size,
       hitRate: requestCount > 0 ? (cacheHits / requestCount * 100).toFixed(1) + '%' : '0%'
     }
-  });
+  };
+
+  console.log(`💓 Health check: ${embedder ? 'READY' : 'NOT READY'} (requests: ${requestCount}, cache: ${embeddingCache.size}/${MAX_CACHE_SIZE}, hit rate: ${response.stats.hitRate})`);
+
+  res.json(response);
 });
 
 // Single text embedding
@@ -91,20 +95,29 @@ app.post('/embed', async (req, res) => {
 
   try {
     if (!embedder) {
+      console.warn('⚠️ Embed request but model not loaded yet');
       return res.status(503).json({ error: 'Model not loaded yet' });
     }
 
     const { text } = req.body;
 
     if (!text) {
+      console.warn('⚠️ Embed request missing text field');
       return res.status(400).json({ error: 'Missing "text" field' });
     }
 
+    const textPreview = text.slice(0, 80).replace(/\n/g, ' ');
+    console.log(`📥 Embed request: "${textPreview}..." (${text.length} chars)`);
+
     requestCount++;
+    const cacheKey = getCacheKey(text);
+    const wasCached = embeddingCache.has(cacheKey);
+
     const embedding = await generateEmbedding(text);
 
     const elapsed = Date.now() - start;
-    console.log(`✅ Embed: ${elapsed}ms (${embedding.length} dims, cache: ${embeddingCache.size})`);
+    const cacheStatus = wasCached ? '💾 CACHE HIT' : '🔄 GENERATED';
+    console.log(`✅ ${cacheStatus}: ${elapsed}ms (${embedding.length} dims, cache: ${embeddingCache.size}/${MAX_CACHE_SIZE})`);
 
     res.json({
       embedding,
@@ -112,7 +125,8 @@ app.post('/embed', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Embedding error:', error);
+    console.error('❌ Embedding error:', error.message);
+    console.error('   Stack:', error.stack);
     res.status(500).json({ error: error.message });
   }
 });
@@ -123,13 +137,26 @@ app.post('/embed/batch', async (req, res) => {
 
   try {
     if (!embedder) {
+      console.warn('⚠️ Batch embed request but model not loaded yet');
       return res.status(503).json({ error: 'Model not loaded yet' });
     }
 
     const { texts } = req.body;
 
     if (!Array.isArray(texts)) {
+      console.warn('⚠️ Batch embed request missing texts array');
       return res.status(400).json({ error: 'Missing "texts" array' });
+    }
+
+    console.log(`📥 Batch request: ${texts.length} texts to embed`);
+
+    // Check how many are cached
+    const cacheStatus = texts.map(text => embeddingCache.has(getCacheKey(text)));
+    const cachedCount = cacheStatus.filter(Boolean).length;
+    const newCount = texts.length - cachedCount;
+
+    if (cachedCount > 0) {
+      console.log(`   💾 ${cachedCount} cached, 🔄 ${newCount} to generate`);
     }
 
     requestCount += texts.length;
@@ -141,7 +168,7 @@ app.post('/embed/batch', async (req, res) => {
 
     const elapsed = Date.now() - start;
     const avgTime = (elapsed / texts.length).toFixed(1);
-    console.log(`✅ Batch: ${texts.length} embeddings in ${elapsed}ms (avg ${avgTime}ms each, cache: ${embeddingCache.size})`);
+    console.log(`✅ Batch complete: ${texts.length} embeddings in ${elapsed}ms (avg ${avgTime}ms each, cache: ${embeddingCache.size}/${MAX_CACHE_SIZE})`);
 
     res.json({
       embeddings,
@@ -150,18 +177,20 @@ app.post('/embed/batch', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Batch embedding error:', error);
+    console.error('❌ Batch embedding error:', error.message);
+    console.error('   Stack:', error.stack);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Clear cache endpoint (optional - for debugging)
-app.post('/cache/clear', (req, res) => {
+app.post('/cache/clear', (_req, res) => {
+  const prevSize = embeddingCache.size;
   embeddingCache.clear();
   cacheHits = 0;
   requestCount = 0;
-  console.log('🧹 Cache cleared');
-  res.json({ status: 'cache cleared' });
+  console.log(`🧹 Cache cleared (removed ${prevSize} entries, reset stats)`);
+  res.json({ status: 'cache cleared', entriesRemoved: prevSize });
 });
 
 const PORT = process.env.PORT || 3000;
@@ -169,12 +198,21 @@ const PORT = process.env.PORT || 3000;
 // Load model then start server
 loadModel().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
+    console.log('='.repeat(60));
     console.log(`🚀 Embedding service listening on port ${PORT}`);
     console.log(`📊 Model: all-MiniLM-L6-v2 (384 dimensions)`);
     console.log(`💾 Cache: ${MAX_CACHE_SIZE} entries max`);
     console.log(`🔗 Ready to serve embeddings to all bots!`);
+    console.log('='.repeat(60));
+    console.log(`📍 Endpoints:`);
+    console.log(`   GET  /health         - Health check with stats`);
+    console.log(`   POST /embed          - Single text embedding`);
+    console.log(`   POST /embed/batch    - Batch embeddings`);
+    console.log(`   POST /cache/clear    - Clear cache (debug)`);
+    console.log('='.repeat(60));
   });
 }).catch(err => {
   console.error('❌ Failed to load model:', err);
+  console.error('   Stack:', err.stack);
   process.exit(1);
 });
